@@ -2,7 +2,7 @@
 title: ML Docs Backend
 emoji: 🧠
 colorFrom: green
-colorTo: emerald
+colorTo: pink
 sdk: docker
 pinned: false
 ---
