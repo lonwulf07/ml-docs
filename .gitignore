@@ -1,0 +1,15 @@
+# Environments
+venv/
+.env
+
+# Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Python Cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Do NOT ignore frontend/public/docs/ because we WANT our deployed site to have the markdown files!
