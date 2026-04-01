@@ -1,3 +1,14 @@
+---
+title: ML Docs V2 API
+emoji: 🚀
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
+This is the FastAPI backend for the ML Docs Agent.
+
 # 🧠 ML Docs Agent: Local Knowledge Engine
 
 An enterprise-grade Retrieval-Augmented Generation (RAG) application that scrapes, embeds, and indexes machine learning documentation. It features a completely free local embedding pipeline, a cloud-hosted vector database, a containerized FastAPI backend, and a modern Next.js reading environment.
