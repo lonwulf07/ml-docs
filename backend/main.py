@@ -44,6 +44,12 @@ embedder = SentenceTransformer('all-MiniLM-L6-v2')
 # Define Request Model
 class ChatRequest(BaseModel):
     query: str
+    
+class LibraryRequest(BaseModel):
+    library_name: str
+
+class PageRequest(BaseModel):
+    url: str
 
 @app.get("/")
 def health_check():
@@ -106,4 +112,26 @@ def chat_endpoint(request: ChatRequest):
 
     except Exception as e:
         print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/library/index")
+def get_library_index(request: LibraryRequest):
+    try:
+        # Fetch the URLs for this library to build a Table of Contents.
+        # We limit to 500 so massive libraries don't crash the frontend UI!
+        res = supabase.table("documents").select("url").eq("library_name", request.library_name).limit(500).execute()
+        urls = [row['url'] for row in res.data]
+        return {"urls": urls}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/library/page")
+def get_page_content(request: PageRequest):
+    try:
+        # Fetch the exact markdown text for the clicked chapter
+        res = supabase.table("documents").select("content").eq("url", request.url).execute()
+        if res.data:
+            return {"content": res.data[0]['content']}
+        return {"content": "# Page not found in cloud database."}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
