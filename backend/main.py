@@ -1,124 +1,106 @@
 import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from dotenv import load_dotenv
-from pinecone import Pinecone
 from supabase import create_client, Client
-from sentence_transformers import SentenceTransformer
+from pinecone import Pinecone
 import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
 
-# Load environment variables
-load_dotenv()
+load_dotenv()  # Load environment variables from .env file
 
-# Initialize FastAPI
-app = FastAPI(title="ML Docs V2 API")
+# 1. Setup Connections
+app = FastAPI()
 
-# Allow your Vercel frontend to talk to this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace "*" with your actual Vercel URL
+    allow_origins=["*"], # In production, restrict this to your Vercel URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize Cloud Clients
-print("🔌 Connecting to Supabase...")
-url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
-supabase: Client = create_client(url, key)
+# Initialize Supabase
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key)
 
-print("🌲 Connecting to Pinecone...")
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+# Initialize Pinecone
+pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
 index = pc.Index("ml-docs")
 
-print("✨ Connecting to Gemini...")
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize Gemini
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 llm = genai.GenerativeModel('gemini-2.5-flash')
 
-# Initialize Local Embedding Model (CPU)
-print("🧠 Loading Embedding Model...")
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
+# Initialize local embedding model (Runs on CPU in Hugging Face)
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Define Request Model
+# 2. Request Models
 class ChatRequest(BaseModel):
     query: str
-    
+
 class LibraryRequest(BaseModel):
     library_name: str
 
 class PageRequest(BaseModel):
     url: str
 
-@app.get("/")
-def health_check():
-    return {"status": "V2 Backend is running and connected to Supabase/Pinecone."}
-
+# 3. Endpoints
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest):
     try:
-        # 1. Embed the user's question
-        query_vector = embedder.encode(request.query).tolist()
+        # Step 1: Embed User Query
+        query_embedding = embed_model.encode(request.query).tolist()
 
-        # 2. Search Pinecone for the Top 5 most relevant chunks
+        # Step 2: Search Pinecone
         search_results = index.query(
-            vector=query_vector,
+            vector=query_embedding,
             top_k=5,
             include_metadata=True
         )
 
-        if not search_results['matches']:
+        if not search_results.matches:
             return {"response": "I couldn't find any relevant documentation in the database."}
 
-        # 3. Extract the Supabase row_ids from the Pinecone metadata
-        row_ids = [match['metadata']['row_id'] for match in search_results['matches']]
+        # Step 3: Extract Context and Sources
+        context = ""
+        unique_sources = set()
+        for match in search_results.matches:
+            meta = match.metadata
+            context += f"Source: {meta.get('url')}\nContent: {meta.get('text_snippet')}\n\n"
+            unique_sources.add(meta.get('url'))
 
-        # 4. Fetch the actual Markdown text from Supabase
-        # We use 'in_' to fetch all matching IDs in a single database trip for speed!
-        db_response = supabase.table("documents").select("content, library_name, url").in_("id", row_ids).execute()
-        
-        # 5. Assemble the Context for Gemini
-        context_blocks = []
-        sources = set() # Use a set to avoid duplicate source links
-        
-        for row in db_response.data:
-            context_blocks.append(f"--- From {row['library_name']} ---\n{row['content'][:1500]}") # Limiting to 1500 chars per chunk to save tokens
-            sources.add(row['url'])
-
-        joined_context = "\n\n".join(context_blocks)
-        
-        # 6. Prompt Gemini
+        # Step 4: Generate Answer with Gemini
         prompt = f"""
-        You are an expert Machine Learning developer assistant. 
-        Answer the user's question using ONLY the provided documentation context below.
-        If the context does not contain the answer, say "I don't have enough information in my current documentation to answer that."
-        Format your answer beautifully using Markdown, especially for code blocks.
+        You are an expert AI software engineer. Answer the user's question using ONLY the provided documentation context.
+        Format your response in clean Markdown. Include code blocks where applicable.
         
-        User Question: {request.query}
+        Context:
+        {context}
         
-        Documentation Context:
-        {joined_context}
+        Question: {request.query}
         """
         
-        gemini_response = llm.generate_content(prompt)
-        
-        # Append the sources to the bottom of the response
-        final_answer = gemini_response.text + "\n\n**Sources used:**\n"
-        for source in sources:
-            final_answer += f"- [{source}]({source})\n"
+        response = llm.generate_content(prompt)
+        answer = response.text
 
-        return {"response": final_answer}
+        # Append source links to the bottom of the Markdown response
+        if unique_sources:
+            answer += "\n\n**Sources used:**\n"
+            for src in unique_sources:
+                answer += f"* [{src.split('/')[-1]}]({src})\n"
+
+        return {"response": answer}
 
     except Exception as e:
-        print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.post("/library/index")
 def get_library_index(request: LibraryRequest):
     try:
-        # Fetch the URLs for this library to build a Table of Contents.
-        # We limit to 500 so massive libraries don't crash the frontend UI!
+        # Fetch up to 500 URLs to build the Table of Contents
         res = supabase.table("documents").select("url").eq("library_name", request.library_name).limit(500).execute()
         urls = [row['url'] for row in res.data]
         return {"urls": urls}
@@ -128,7 +110,7 @@ def get_library_index(request: LibraryRequest):
 @app.post("/library/page")
 def get_page_content(request: PageRequest):
     try:
-        # Fetch the exact markdown text for the clicked chapter
+        # Fetch the exact pristine Markdown from Supabase
         res = supabase.table("documents").select("content").eq("url", request.url).execute()
         if res.data:
             return {"content": res.data[0]['content']}
