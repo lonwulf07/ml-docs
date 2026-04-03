@@ -2,19 +2,11 @@
 import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  Send,
-  Sparkles,
-  ChevronUp,
-  ChevronDown,
-  Link as LinkIcon,
-  Trash2,
-} from "lucide-react";
+import { Send, Sparkles, ChevronUp, ChevronDown, Trash2 } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
-  sources?: string[];
 }
 
 export default function ChatDrawer() {
@@ -22,6 +14,9 @@ export default function ChatDrawer() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+
+  const API_URL =
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/chat";
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -31,32 +26,24 @@ export default function ChatDrawer() {
     setInput("");
     setIsTyping(true);
 
-    // Auto-open drawer if closed
     if (!isOpen) setIsOpen(true);
 
     try {
-      const res = await fetch("https://lonwulf-ml-docs.hf.space/chat", {
+      const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
+        body: JSON.stringify({ query: input }),
       });
-      const data = await res.json();
 
+      const data = await res.json();
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          content: data.answer,
-          sources: data.sources,
-        },
+        { role: "assistant", content: data.response },
       ]);
     } catch (e) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          content: "Error connecting to backend vector store.",
-        },
+        { role: "assistant", content: "⚠️ Error connecting to backend." },
       ]);
     } finally {
       setIsTyping(false);
@@ -64,14 +51,17 @@ export default function ChatDrawer() {
   };
 
   const clearChat = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent closing the drawer
+    e.stopPropagation();
     setMessages([]);
   };
 
+  // Mobile width spans 100%, desktop is 500px
+  const drawerClasses = `fixed bottom-0 right-0 md:right-10 w-full md:w-[500px] transition-all duration-500 z-50 ${
+    isOpen ? "h-[85vh] md:h-[650px]" : "h-14"
+  }`;
+
   return (
-    <div
-      className={`fixed bottom-0 right-10 w-[500px] transition-all duration-500 z-50 ${isOpen ? "h-[650px]" : "h-14"}`}
-    >
+    <div className={drawerClasses}>
       <div className="bg-slate-900 border border-slate-800 border-b-0 rounded-t-3xl shadow-2xl h-full flex flex-col overflow-hidden">
         {/* Header */}
         <button
@@ -86,7 +76,7 @@ export default function ChatDrawer() {
             {messages.length > 0 && (
               <div
                 onClick={clearChat}
-                className="p-1.5 hover:bg-emerald-500/20 rounded-md transition-colors text-emerald-600 hover:text-emerald-400"
+                className="p-1.5 hover:bg-emerald-500/20 rounded-md text-emerald-600 hover:text-emerald-400"
                 title="Clear Chat"
               >
                 <Trash2 size={16} />
@@ -97,11 +87,13 @@ export default function ChatDrawer() {
         </button>
 
         {/* Chat Body */}
-        <div className="flex-1 p-6 overflow-y-auto space-y-6 scroll-smooth bg-slate-950/50">
+        <div className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6 bg-slate-950/50 scroll-smooth">
           {messages.length === 0 && !isTyping && (
             <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-4">
               <Sparkles size={32} className="text-slate-700" />
-              <p>Ask me anything about your indexed libraries!</p>
+              <p className="text-sm">
+                Ask me anything about your indexed libraries!
+              </p>
             </div>
           )}
 
@@ -111,48 +103,38 @@ export default function ChatDrawer() {
               className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}
             >
               <div
-                className={`max-w-[90%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                className={`max-w-[95%] md:max-w-[90%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
                   m.role === "user"
                     ? "bg-emerald-600 text-white rounded-br-sm"
-                    : // Tailwind Typography applied to Assistant for gorgeous code blocks
-                      "bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-sm prose prose-invert prose-emerald prose-p:leading-relaxed prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 prose-code:text-emerald-300"
+                    : "bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-sm prose prose-invert prose-emerald prose-p:leading-relaxed prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 prose-code:text-emerald-300"
                 }`}
               >
                 {m.role === "user" ? (
                   m.content
                 ) : (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ node, ...props }) => (
+                        <a
+                          {...props}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-emerald-400 hover:underline"
+                        />
+                      ),
+                    }}
+                  >
                     {m.content}
                   </ReactMarkdown>
                 )}
               </div>
-
-              {/* Display Sources */}
-              {m.sources && m.sources.length > 0 && (
-                <div className="mt-2 ml-2 flex flex-wrap gap-2 max-w-[90%]">
-                  {m.sources.map((src, idx) => (
-                    <a
-                      key={idx}
-                      href={src}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 text-[10px] text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-full hover:bg-emerald-500/20 transition-colors line-clamp-1 max-w-full"
-                    >
-                      <LinkIcon size={10} className="shrink-0" />
-                      <span className="truncate">
-                        {new URL(src).pathname.split("/").pop() || "Source"}
-                      </span>
-                    </a>
-                  ))}
-                </div>
-              )}
             </div>
           ))}
 
-          {/* Dynamic Cursor / Thinking State */}
           {isTyping && (
             <div className="flex flex-col items-start">
-              <div className="max-w-[85%] p-4 rounded-2xl bg-slate-800 border border-slate-700 rounded-bl-sm flex items-center gap-2 text-emerald-400">
+              <div className="p-4 rounded-2xl bg-slate-800 border border-slate-700 rounded-bl-sm flex items-center gap-2 text-emerald-400">
                 <span className="text-sm font-mono">Thinking</span>
                 <span className="w-2 h-4 bg-emerald-400 animate-pulse block"></span>
               </div>
@@ -162,18 +144,18 @@ export default function ChatDrawer() {
 
         {/* Input Area */}
         <div className="p-4 bg-slate-950 border-t border-slate-800">
-          <div className="flex gap-2 p-1.5 bg-slate-900 rounded-xl border border-slate-800 focus-within:border-emerald-500/50 transition-colors shadow-inner">
+          <div className="flex gap-2 p-1.5 bg-slate-900 rounded-xl border border-slate-800 focus-within:border-emerald-500/50 shadow-inner">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              placeholder="Query your Local Database..."
+              placeholder="Query the Cloud Database..."
               className="flex-1 bg-transparent border-none focus:ring-0 text-sm px-3 text-white placeholder:text-slate-600 outline-none"
             />
             <button
               onClick={handleSend}
               disabled={isTyping || !input.trim()}
-              className="p-3 bg-emerald-500 rounded-lg text-slate-950 hover:bg-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-3 bg-emerald-500 rounded-lg text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
             >
               <Send size={16} className={isTyping ? "opacity-50" : ""} />
             </button>

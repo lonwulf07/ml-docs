@@ -2,220 +2,317 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSlug from "rehype-slug";
 import Sidebar from "@/components/Sidebar";
 import ChatDrawer from "@/components/ChatDrawer";
-import { ExternalLink, Database, Cpu, HardDrive } from "lucide-react";
+import { ExternalLink, Database, Cpu, Cloud, Menu } from "lucide-react";
 
 export default function App() {
-  const [activeId, setActiveId] = useState("home");
-  const [activeName, setActiveName] = useState("Home");
+  const [activeLibrary, setActiveLibrary] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile state
 
-  // NEW: Pagination States
   const [sections, setSections] = useState<
-    { title: string; content: string }[]
+    { title: string; url: string; content?: string }[]
   >([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const processMarkdownIntoPages = (md: string) => {
-    // Split the massive text at every H2 (##) to create distinct pages
-    const rawSections = md.split(/\n(?=##\s+)/);
+  // Update this to your deployed Hugging Face Space URL!
+  const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-    const parsedSections = rawSections.map((sec, index) => {
-      // Find the first heading to use as the button title
-      const headingMatch = sec.match(/^(#{1,4})\s+(.*)$/m);
-      let title = `Page ${index + 1}`;
+  const handleNavigation = async (libName: string) => {
+    setActiveLibrary(libName);
+    setSections([]);
+    setIsLoading(true);
 
-      if (headingMatch) {
-        let rawText = headingMatch[2].trim();
-        // Clean Sphinx/Markdown junk
-        let cleanText = rawText.replace(/\[[¶#]\]\([^)]+\)/g, "");
-        cleanText = cleanText.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
-        cleanText = cleanText.replace(/[*_`]/g, "").trim();
+    try {
+      const res = await fetch(`${BASE_URL}/library/index`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ library_name: libName }),
+      });
+      const data = await res.json();
 
-        // If the title is our crawler URL, clean it up to look nice!
-        if (cleanText.startsWith("Source:")) {
-          try {
-            const urlStr = cleanText.replace("Source:", "").trim();
-            const pathParts = new URL(urlStr).pathname
-              .split("/")
-              .filter(Boolean);
-            let lastPart = pathParts.pop();
-            if (
-              lastPart &&
-              (lastPart.includes(".html") || lastPart === "index")
-            ) {
-              lastPart = pathParts.pop() || lastPart.replace(".html", "");
-            }
-            title = lastPart ? lastPart.replace(/[-_]/g, " ") : "Overview";
-            title = title.charAt(0).toUpperCase() + title.slice(1);
-          } catch (e) {
-            title = "Overview";
-          }
-        } else {
-          title = cleanText;
-        }
-      }
+      const newSections = data.urls.map((url: string) => {
+        let title =
+          new URL(url).pathname.split("/").filter(Boolean).pop() || "Overview";
+        title = title.replace(/[-_]/g, " ").replace(".html", "");
+        return { title: title.charAt(0).toUpperCase() + title.slice(1), url };
+      });
 
-      // If title is empty or just "Overview" multiple times, ensure uniqueness
-      return { title: title || `Page ${index + 1}`, content: sec };
-    });
-
-    setSections(parsedSections);
-    setActiveIndex(0); // Reset to first page
+      setSections(newSections);
+      if (newSections.length > 0) loadPageContent(newSections, 0);
+      else setIsLoading(false);
+    } catch (err) {
+      console.error(err);
+      setIsLoading(false);
+    }
   };
 
-  const handleNavigation = async (
-    url: string,
-    name: string,
-    category: string,
-  ) => {
-    setActiveId(url);
-    setActiveName(name);
-
-    if (url === "home") {
-      setSections([]);
+  const loadPageContent = async (currentSections: any[], index: number) => {
+    setIsLoading(true);
+    setActiveIndex(index);
+    if (currentSections[index].content) {
+      setIsLoading(false);
       return;
     }
 
-    setIsLoading(true);
-    let hostname = new URL(url).hostname;
-    hostname = hostname.replace("docs.", "").replace("www.", "");
-    const domain = hostname.split(".")[0];
-    const filename = `${category}_${domain}.md`;
-
     try {
-      const res = await fetch(`/docs/${filename}`);
-      if (res.ok) {
-        const text = await res.text();
-        processMarkdownIntoPages(text);
-      } else {
-        processMarkdownIntoPages(
-          `# Document Not Found\nRun your python scraper to generate \`${filename}\`.`,
-        );
-      }
+      const res = await fetch(`${BASE_URL}/library/page`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: currentSections[index].url }),
+      });
+      const data = await res.json();
+      const updatedSections = [...currentSections];
+      updatedSections[index].content = data.content;
+      setSections(updatedSections);
     } catch (err) {
-      processMarkdownIntoPages("# Error loading documentation.");
+      console.error(err);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Scroll to top when changing pages
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo(0, 0);
-    }
+    if (scrollRef.current) scrollRef.current.scrollTo(0, 0);
   }, [activeIndex]);
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-200">
+    <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden relative">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       <Sidebar
         onSelect={handleNavigation}
-        activeId={activeId}
-        activeName={activeName}
+        activeLibrary={activeLibrary}
         sections={sections}
         activeIndex={activeIndex}
-        onSectionChange={setActiveIndex}
-        onBack={() => handleNavigation("home", "Home", "")}
+        onSectionChange={(idx) => loadPageContent(sections, idx)}
+        onBack={() => {
+          setActiveLibrary(null);
+          setSections([]);
+        }}
+        isOpen={isSidebarOpen}
+        setIsOpen={setIsSidebarOpen}
       />
 
       <main
         ref={scrollRef}
-        className="flex-1 relative overflow-y-auto p-12 scroll-smooth"
+        className="flex-1 relative overflow-y-auto scroll-smooth w-full"
       >
-        {activeId === 'home' ? (
-          <div className="max-w-5xl mx-auto space-y-16 animate-in fade-in duration-700 mt-8 pb-32">
-             {/* Hero Section */}
-             <div className="space-y-6">
-               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold uppercase tracking-widest border border-emerald-500/20">
-                 <span className="relative flex h-2 w-2">
-                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                 </span>
-                 System Online
-               </div>
-               <h2 className="text-6xl md:text-7xl font-black text-white tracking-tighter leading-[1.1]">
-                 ML <br />
-                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
-                   Knowledge Engine
-                 </span>
-               </h2>
-               <p className="text-xl text-slate-400 max-w-2xl leading-relaxed">
-                 Some of the industry standard machine learning documentation available here. Select a library from the sidebar to begin exploring, or open the chat to query the vector database.
-               </p>
-             </div>
+        {/* Mobile Header Menu */}
+        <div className="md:hidden flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950 sticky top-0 z-20">
+          <h1 className="font-bold text-white tracking-tight">ML Agent V2</h1>
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-2 bg-slate-900 rounded-lg text-emerald-400"
+          >
+            <Menu size={20} />
+          </button>
+        </div>
 
-             {/* Tech Stack Cards */}
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 hover:border-emerald-500/30 transition-colors backdrop-blur-sm">
+        <div className="p-6 md:p-12">
+          {!activeLibrary ? (
+            /* HERO VIEW */
+            <div className="max-w-5xl mx-auto space-y-12 md:space-y-16 animate-in fade-in duration-700 md:mt-8 pb-32">
+              <div className="space-y-6">
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold uppercase tracking-widest border border-emerald-500/20">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  Cloud Reader Online
+                </div>
+                <h2 className="text-5xl md:text-7xl font-black text-white tracking-tighter leading-[1.1]">
+                  ML <br />
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
+                    Knowledge Engine
+                  </span>
+                </h2>
+                <p className="text-lg md:text-xl text-slate-400 max-w-2xl leading-relaxed">
+                  Select a library from the sidebar to browse the cloud
+                  documentation manually, or open the chat to query the vector
+                  database directly.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 backdrop-blur-sm">
                   <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6 border border-emerald-500/20">
                     <Database className="text-emerald-400" size={24} />
                   </div>
-                  <h3 className="text-lg font-bold text-white mb-2">Pinecone RAG</h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">Vector search retrieves exact context from thousands of pages to eliminate AI hallucinations.</p>
+                  <h3 className="text-lg font-bold text-white mb-2">
+                    Pinecone RAG
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Vector search retrieves exact context from thousands of
+                    pages.
+                  </p>
                 </div>
-
-                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 hover:border-emerald-500/30 transition-colors backdrop-blur-sm">
+                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 backdrop-blur-sm">
+                  <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6 border border-emerald-500/20">
+                    <Cloud className="text-emerald-400" size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white mb-2">
+                    Cloud Storage
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Pristine Markdown is hosted in Supabase for on-demand
+                    streaming.
+                  </p>
+                </div>
+                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 backdrop-blur-sm">
                   <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6 border border-emerald-500/20">
                     <Cpu className="text-emerald-400" size={24} />
                   </div>
-                  <h3 className="text-lg font-bold text-white mb-2">Local Embeddings</h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">Running `all-MiniLM-L6-v2` locally on your CPU bypasses all API rate limits for infinite scraping.</p>
+                  <h3 className="text-lg font-bold text-white mb-2">
+                    FastAPI Backend
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Lightning-fast orchestration of database retrieval and AI
+                    context generation.
+                  </p>
                 </div>
-
-                <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800 hover:border-emerald-500/30 transition-colors backdrop-blur-sm">
-                  <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6 border border-emerald-500/20">
-                    <HardDrive className="text-emerald-400" size={24} />
-                  </div>
-                  <h3 className="text-lg font-bold text-white mb-2">Markdown Storage</h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">Raw HTML is converted to clean Markdown and cached locally for instantaneous UI rendering.</p>
-                </div>
-             </div>
-          </div>
-        ) : (
-          <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-32">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-6">
-              <h2 className="text-4xl font-bold text-white capitalize">
-                {activeName}
-              </h2>
-              <a
-                href={activeId}
-                target="_blank"
-                rel="noreferrer"
-                className="text-emerald-400 hover:underline flex items-center gap-2"
-              >
-                Official Site <ExternalLink size={14} />
-              </a>
-            </div>
-
-            {isLoading ? (
-              <div className="animate-pulse space-y-4 pt-4">
-                <div className="h-8 bg-slate-800 rounded w-1/3"></div>
-                <div className="h-4 bg-slate-800 rounded w-full"></div>
-                <div className="h-4 bg-slate-800 rounded w-5/6"></div>
               </div>
-            ) : (
-              <article
-                className="prose prose-invert prose-emerald max-w-none 
-                prose-headings:text-white prose-a:text-emerald-400 prose-code:text-emerald-300
-                prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 animate-in fade-in duration-300"
-              >
-                {/* WE ONLY RENDER THE ACTIVE SECTION NOW */}
-                {sections.length > 0 && (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeSlug]}
+            </div>
+          ) : (
+            /* CLOUD READER VIEW */
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-32">
+              <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 pb-6 md:mt-8 gap-4">
+                <h2 className="text-3xl md:text-4xl font-bold text-white capitalize break-words">
+                  {sections[activeIndex]?.title || "Loading..."}
+                </h2>
+                {sections[activeIndex] && (
+                  <a
+                    href={sections[activeIndex].url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-emerald-400 hover:underline flex items-center gap-2 text-sm shrink-0"
                   >
-                    {sections[activeIndex].content}
-                  </ReactMarkdown>
+                    Original Source <ExternalLink size={14} />
+                  </a>
                 )}
-              </article>
-            )}
-          </div>
-        )}
+              </div>
+
+              {isLoading ? (
+                <div className="animate-pulse space-y-4 pt-4">
+                  <div className="h-8 bg-slate-800 rounded w-1/3"></div>
+                  <div className="h-4 bg-slate-800 rounded w-full"></div>
+                  <div className="h-4 bg-slate-800 rounded w-5/6"></div>
+                </div>
+              ) : (
+                <article className="max-w-3xl mx-auto w-full animate-in fade-in duration-300 pb-20">
+                  {sections[activeIndex]?.content ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({ node, ...props }) => (
+                          <h1
+                            className="text-3xl md:text-4xl font-black text-white mt-12 mb-6 tracking-tight"
+                            {...props}
+                          />
+                        ),
+                        h2: ({ node, ...props }) => (
+                          <h2
+                            className="text-2xl md:text-3xl font-bold text-white mt-10 mb-4 tracking-tight border-b border-slate-800 pb-2"
+                            {...props}
+                          />
+                        ),
+                        h3: ({ node, ...props }) => (
+                          <h3
+                            className="text-xl md:text-2xl font-semibold text-white mt-8 mb-4"
+                            {...props}
+                          />
+                        ),
+                        p: ({ node, ...props }) => (
+                          <p
+                            className="text-base md:text-[1.05rem] leading-[1.8] text-slate-300 mb-6"
+                            {...props}
+                          />
+                        ),
+                        ul: ({ node, ...props }) => (
+                          <ul
+                            className="list-disc list-outside ml-6 mb-8 text-slate-300 space-y-3 leading-relaxed"
+                            {...props}
+                          />
+                        ),
+                        ol: ({ node, ...props }) => (
+                          <ol
+                            className="list-decimal list-outside ml-6 mb-8 text-slate-300 space-y-3 leading-relaxed"
+                            {...props}
+                          />
+                        ),
+                        a: ({ node, ...props }) => (
+                          <a
+                            className="text-emerald-400 hover:text-emerald-300 underline underline-offset-4 decoration-emerald-500/30"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            {...props}
+                          />
+                        ),
+                        blockquote: ({ node, ...props }) => (
+                          <blockquote
+                            className="border-l-4 border-emerald-500 bg-emerald-500/5 px-4 md:px-6 py-4 rounded-r-xl my-6 text-slate-300 italic"
+                            {...props}
+                          />
+                        ),
+                        code: ({
+                          node,
+                          inline,
+                          className,
+                          children,
+                          ...props
+                        }: any) => {
+                          const match = /language-(\w+)/.exec(className || "");
+                          const isInline = inline || !match;
+                          return isInline ? (
+                            <code
+                              className="bg-slate-800 text-emerald-300 px-1.5 py-0.5 rounded-md text-[0.9em] font-mono break-all"
+                              {...props}
+                            >
+                              {children}
+                            </code>
+                          ) : (
+                            <div className="relative my-8 rounded-xl overflow-hidden bg-[#0d1117] border border-slate-800 shadow-xl max-w-full">
+                              <div className="flex items-center px-4 py-3 bg-slate-900 border-b border-slate-800">
+                                <div className="flex gap-2">
+                                  <div className="w-3 h-3 rounded-full bg-slate-700"></div>
+                                  <div className="w-3 h-3 rounded-full bg-slate-700"></div>
+                                  <div className="w-3 h-3 rounded-full bg-slate-700"></div>
+                                </div>
+                                <span className="ml-4 text-xs font-mono text-slate-500 uppercase">
+                                  {match[1] || "text"}
+                                </span>
+                              </div>
+                              <pre className="p-4 md:p-5 overflow-x-auto text-[0.85rem] md:text-[0.9rem] font-mono text-slate-300 leading-[1.7]">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </pre>
+                            </div>
+                          );
+                        },
+                      }}
+                    >
+                      {/* V3 MAGIC: Direct injection. No more messy formatRawCodeBlocks() needed! */}
+                      {sections[activeIndex].content}
+                    </ReactMarkdown>
+                  ) : (
+                    <p className="text-slate-500 italic text-center mt-20">
+                      No content available.
+                    </p>
+                  )}
+                </article>
+              )}
+            </div>
+          )}
+        </div>
         <ChatDrawer />
       </main>
     </div>
